@@ -10,7 +10,7 @@ const erc20Abi = require('./erc20-abi.json');
 const SECONDS_PER_YEAR = 31536000;
 const SECONDS_PER_DAY = 86400;
 const LEVERAGE_TOKEN_DECIMALS = 18;
-const USD_DECIMALS = 8;
+const USD_DECIMALS = 18;
 const COMPOUNDING_PERIODS = 1;
 const chains = ['ethereum', 'base'];
 
@@ -39,23 +39,42 @@ const getAllLeverageTokens = async (chain, toBlock) => {
     })
   );
 
-  return leverageTokenCreatedEvents.output.filter((ev) => !ev.removed).map((ev) => iface.parseLog(ev).args).map((ev) => {
+  const leverageTokens = leverageTokenCreatedEvents.output.filter((ev) => !ev.removed).map((ev) => iface.parseLog(ev).args).map((ev) => {
     return {
       address: ev.token,
       collateralAsset: ev.collateralAsset,
       lendingAdapter: ev.config[0]
     }
   });
+
+  const collateralDecimals = (
+    await sdk.api.abi.multiCall({
+      chain,
+      abi: erc20Abi.find(({ name }) => name === 'decimals'),
+      calls: leverageTokens.map(({ collateralAsset }) => ({ target: collateralAsset })),
+      permitFailure: true,
+    })
+  ).output.map(({ output, success }) => success ? output : null);
+
+  return leverageTokens.map(({ address, collateralAsset, lendingAdapter }, i) => {
+    return {
+      address,
+      collateralAsset,
+      lendingAdapter,
+      collateralDecimals: collateralDecimals[i]
+    };
+  });
+
 };
 
 function formatUnitsToNumber(value, decimals) {
   return Number(ethers.utils.formatUnits(value, decimals));
 }
 
-function calculateApy(endValue, startValue, timeWindow, compoundingPeriods) {
-  const endValueNumber = formatUnitsToNumber(endValue, USD_DECIMALS);
+function calculateApy(endValue, startValue, timeWindow, compoundingPeriods, decimals) {
+  const endValueNumber = formatUnitsToNumber(endValue, decimals);
 
-  const startValueNumber = formatUnitsToNumber(startValue, USD_DECIMALS);
+  const startValueNumber = formatUnitsToNumber(startValue, decimals);
 
   const timeWindowNumber = Number(timeWindow);
 
@@ -82,49 +101,29 @@ const getLeverageTokenTvlsUsd = async (chain, leverageTokens) => {
     chain
   );
 
-  const collateralDecimals = (
-    await sdk.api.abi.multiCall({
-      chain,
-      abi: erc20Abi.find(({ name }) => name === 'decimals'),
-      calls: leverageTokens.map(({ collateralAsset }) => ({ target: collateralAsset })),
-      permitFailure: true,
-    })
-  ).output.map(({ output, success }) => success ? output : null);
-
   return totalCollaterals.map((totalCollateral, i) => {
     const collateralAsset = leverageTokens[i].collateralAsset;
 
-    return (totalCollateral !== null && collateralDecimals[i] !== null && pricesByAddress[collateralAsset.toLowerCase()] !== null)
-      ? totalCollateral / 10 ** collateralDecimals[i] * pricesByAddress[collateralAsset.toLowerCase()]
+    const priceBigInt = pricesByAddress[collateralAsset.toLowerCase()]
+      ? ethers.utils.parseUnits(pricesByAddress[collateralAsset.toLowerCase()].toFixed(USD_DECIMALS), USD_DECIMALS).toBigInt()
+      : null;
+
+    return (totalCollateral !== null && leverageTokens[i].collateralDecimals !== null && priceBigInt !== null)
+      ? Number(BigInt(totalCollateral) * priceBigInt / (BigInt(10 ** leverageTokens[i].collateralDecimals) * BigInt(10 ** USD_DECIMALS)))
       : null;
   });
 }
 
-const getLpPricesInDebtAsset = async (chain, blockNumber, leverageTokens) => {
-  const equityInDebtAsset = (
+const getLtPricesInCollateralAsset = async (chain, blockNumber, leverageTokens) => {
+  return (
     await sdk.api.abi.multiCall({
       chain,
-      abi: leverageManagerAbi.find(({ name }) => name === 'getLeverageTokenState'),
-      calls: leverageTokens.map(({ address }) => ({ target: LEVERAGE_MANAGER_ADDRESS[chain], params: [address] })),
+      abi: leverageManagerAbi.find(({ name }) => name === 'convertToAssets'),
+      calls: leverageTokens.map(({ address }) => ({ target: LEVERAGE_MANAGER_ADDRESS[chain], params: [address, BigInt(10 ** LEVERAGE_TOKEN_DECIMALS)] })),
       block: blockNumber,
       permitFailure: true
     })
-  ).output.map(({ output, success }) => success ? output.equity : null);
-
-  const totalSupply = (
-    await sdk.api.abi.multiCall({
-      chain,
-      abi: leverageManagerAbi.find(({ name }) => name === 'getFeeAdjustedTotalSupply'),
-      calls: leverageTokens.map(({ address }) => ({ target: LEVERAGE_MANAGER_ADDRESS[chain], params: [address] })),
-      block: blockNumber
-    })
-  ).output.map(({ output }) => output);
-
-  return equityInDebtAsset.map((equity, i) =>
-    equity !== null && totalSupply[i]
-      ? BigInt(equity) * BigInt(10 ** LEVERAGE_TOKEN_DECIMALS) / BigInt(totalSupply[i])
-      : null
-  );
+  ).output.map(({ output, success }) => success ? output : null);
 };
 
 const leverageTokenApys = async (chain) => {
@@ -148,19 +147,19 @@ const leverageTokenApys = async (chain) => {
     })
   ).output.map(({ output }) => output);
 
-  const latestBlockPrices = await getLpPricesInDebtAsset(
+  const latestBlockPricesInCollateral = await getLtPricesInCollateralAsset(
     chain,
     latestBlock.number,
     allLeverageTokens
   );
 
-  const prevBlock1DayPrices = await getLpPricesInDebtAsset(
+  const prevBlock1DayPricesInCollateral = await getLtPricesInCollateralAsset(
     chain,
     prevBlock1Day.number,
     allLeverageTokens
   );
 
-  const prevBlock7DayPrices = await getLpPricesInDebtAsset(
+  const prevBlock7DayPricesInCollateral = await getLtPricesInCollateralAsset(
     chain,
     prevBlock7Day.number,
     allLeverageTokens
@@ -171,19 +170,21 @@ const leverageTokenApys = async (chain) => {
     allLeverageTokens
   );
 
-  const pools = allLeverageTokens.map(({ address, collateralAsset }, i) => {
+  const pools = allLeverageTokens.map(({ address, collateralAsset, collateralDecimals }, i) => {
     const apyBase = calculateApy(
-      latestBlockPrices[i],
-      prevBlock1DayPrices[i],
+      latestBlockPricesInCollateral[i],
+      prevBlock1DayPricesInCollateral[i],
       latestBlock.timestamp - prevBlock1Day.timestamp,
-      COMPOUNDING_PERIODS
+      COMPOUNDING_PERIODS,
+      collateralDecimals
     );
 
     const apyBase7d = calculateApy(
-      latestBlockPrices[i],
-      prevBlock7DayPrices[i],
+      latestBlockPricesInCollateral[i],
+      prevBlock7DayPricesInCollateral[i],
       latestBlock.timestamp - prevBlock7Day.timestamp,
-      COMPOUNDING_PERIODS
+      COMPOUNDING_PERIODS,
+      collateralDecimals
     );
 
     const pool = {

@@ -1,5 +1,6 @@
 const sdk = require('@defillama/sdk');
 const ethers = require('ethers');
+const BigNumber = require('bignumber.js');
 
 const utils = require('../utils');
 const lendingAdapterAbi = require('./lending-adapter-abi.json');
@@ -7,11 +8,12 @@ const leverageManagerAbi = require('./leverage-manager-abi.json');
 const leverageTokenAbi = require('./leverage-token-abi.json');
 const erc20Abi = require('./erc20-abi.json');
 
-const SECONDS_PER_YEAR = 31536000;
 const SECONDS_PER_DAY = 86400;
+const DAYS_PER_YEAR = 365;
+const WEEKS_PER_YEAR = 52;
 const LEVERAGE_TOKEN_DECIMALS = 18;
 const USD_DECIMALS = 18;
-const COMPOUNDING_PERIODS = 1;
+const COMPOUNDING_PERIODS = BigNumber(1);
 const chains = ['ethereum', 'base'];
 
 const LEVERAGE_MANAGER_ADDRESS = {
@@ -91,19 +93,20 @@ function formatUnitsToNumber(value, decimals) {
   return Number(ethers.utils.formatUnits(value, decimals));
 }
 
-function calculateApy(endValue, startValue, timeWindow, compoundingPeriods, decimals) {
-  const endValueNumber = formatUnitsToNumber(endValue, decimals);
-
-  const startValueNumber = formatUnitsToNumber(startValue, decimals);
-
-  const timeWindowNumber = Number(timeWindow);
+function calculateApy(endValue, startValue, timeWindow, aprPeriods) {
+  const endValueBigNumber = BigNumber(endValue);
+  const startValueBigNumber = BigNumber(startValue);
+  const timeWindowBigNumber = BigNumber(timeWindow);
+  const aprPeriodsBigNumber = BigNumber(aprPeriods);
 
   const apr =
-    (endValueNumber / startValueNumber) **
-      (SECONDS_PER_YEAR / timeWindowNumber) -
-    1;
+    (endValueBigNumber.div(startValueBigNumber)).pow(
+      aprPeriodsBigNumber
+    ).minus(1);
 
-  return ((1 + apr / compoundingPeriods) ** compoundingPeriods - 1) * 100;
+  const apy = apr.plus(1).dividedBy(COMPOUNDING_PERIODS).pow(COMPOUNDING_PERIODS).minus(BigNumber(1)).multipliedBy(BigNumber(100));
+  
+  return apy.toNumber();
 }
 
 const getLeverageTokenTvlsUsd = async (chain, leverageTokens) => {
@@ -202,16 +205,14 @@ const leverageTokenApys = async (chain) => {
       latestBlockPricesInDebtAsset[i],
       prevBlock1DayPricesInDebtAsset[i],
       latestBlock.timestamp - prevBlock1Day.timestamp,
-      COMPOUNDING_PERIODS,
-      debtDecimals
+      DAYS_PER_YEAR
     );
 
     const apyBase7d = calculateApy(
       latestBlockPricesInDebtAsset[i],
       prevBlock7DayPricesInDebtAsset[i],
       latestBlock.timestamp - prevBlock7Day.timestamp,
-      COMPOUNDING_PERIODS,
-      debtDecimals
+      WEEKS_PER_YEAR
     );
 
     const pool = {

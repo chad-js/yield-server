@@ -110,6 +110,8 @@ function calculateApy(endValue, startValue, timeWindow, decimals) {
 
   // apy = (((apr + 1) / COMPOUNDING_PERIODS) ^ COMPOUNDING_PERIODS - 1) * 100
   const apy = apr.plus(1).dividedBy(COMPOUNDING_PERIODS).pow(COMPOUNDING_PERIODS).minus(BigNumber(1)).multipliedBy(BigNumber(100));
+
+  console.log("apy:", apy.toString());
   
   return apy.toNumber();
 }

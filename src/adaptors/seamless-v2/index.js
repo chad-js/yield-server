@@ -39,7 +39,7 @@ const getLeverageTokens = async (chain, toBlock) => {
     })
   );
 
-  const leverageTokens = leverageTokenCreatedEvents.output.filter((ev) => !ev.removed).map((ev) => iface.parseLog(ev).args).map((ev) => {
+  const leverageTokens = leverageTokenCreatedEvents.output.map((ev) => iface.parseLog(ev).args).map((ev) => {
     return {
       address: ev.token,
       collateralAsset: ev.collateralAsset,

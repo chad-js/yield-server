@@ -11,7 +11,7 @@ const erc20Abi = require('./erc20-abi.json');
 const SECONDS_PER_DAY = 86400;
 const SECONDS_PER_YEAR = 31536000;
 const LEVERAGE_TOKEN_DECIMALS = 18;
-const COMPOUNDING_PERIODS = BigNumber(1);
+const COMPOUNDING_PERIODS = 1;
 const chains = ['ethereum', 'base'];
 
 const LEVERAGE_MANAGER_ADDRESS = {
@@ -87,20 +87,23 @@ const getLeverageTokens = async (chain, toBlock) => {
   });
 };
 
-function calculateApy(endValue, startValue, timeWindow, aprPeriods) {
-  const endValueBigNumber = BigNumber(endValue);
-  const startValueBigNumber = BigNumber(startValue);
-  const timeWindowBigNumber = BigNumber(timeWindow);
-  const aprPeriodsBigNumber = BigNumber(aprPeriods);
+function formatUnitsToNumber(value, decimals) {
+  return Number(ethers.utils.formatUnits(value, decimals));
+}
+
+function calculateApy(endValue, startValue, timeWindow, compoundingPeriods, decimals) {
+  const endValueNumber = formatUnitsToNumber(endValue, decimals);
+
+  const startValueNumber = formatUnitsToNumber(startValue, decimals);
+
+  const timeWindowNumber = Number(timeWindow);
 
   const apr =
-    (endValueBigNumber.div(startValueBigNumber)).pow(
-      aprPeriodsBigNumber
-    ).minus(1);
+    (endValueNumber / startValueNumber) **
+      (SECONDS_PER_YEAR / timeWindowNumber) -
+    1;
 
-  const apy = apr.dividedBy(COMPOUNDING_PERIODS).plus(1).pow(COMPOUNDING_PERIODS).minus(BigNumber(1)).multipliedBy(BigNumber(100));
-  
-  return apy.toNumber();
+  return ((1 + apr / compoundingPeriods) ** compoundingPeriods - 1) * 100;
 }
 
 const getLeverageTokenTvlsUsd = async (chain, leverageTokens) => {
@@ -122,7 +125,7 @@ const getLeverageTokenTvlsUsd = async (chain, leverageTokens) => {
     const collateralAsset = leverageTokens[i].collateralAsset;
 
     return (totalCollateral !== null && leverageTokens[i].collateralDecimals !== null && pricesByAddress[collateralAsset.toLowerCase()] !== null)
-      ? BigNumber(totalCollateral).dividedBy(BigNumber(10).pow(leverageTokens[i].collateralDecimals)).multipliedBy(BigNumber(pricesByAddress[collateralAsset.toLowerCase()])).toNumber()
+      ? BigNumber(totalCollateral).multipliedBy(BigNumber(pricesByAddress[collateralAsset.toLowerCase()])).dividedBy(BigNumber(10).pow(leverageTokens[i].collateralDecimals)).toNumber()
       : null;
   });
 }
@@ -191,20 +194,20 @@ const leverageTokenApys = async (chain) => {
   );
 
   const pools = allLeverageTokens.map(({ address, collateralAsset, debtDecimals, symbol }, i) => {
-    const dayTimeWindow = latestBlock.timestamp - prevBlock1Day.timestamp;
     const apyBase = calculateApy(
       latestBlockPricesInDebtAsset[i],
       prevBlock1DayPricesInDebtAsset[i],
-      dayTimeWindow,
-      Math.floor(SECONDS_PER_YEAR / dayTimeWindow)
+      latestBlock.timestamp - prevBlock1Day.timestamp,
+      COMPOUNDING_PERIODS,
+      debtDecimals
     );
 
-    const weekTimeWindow = latestBlock.timestamp - prevBlock7Day.timestamp;
     const apyBase7d = calculateApy(
       latestBlockPricesInDebtAsset[i],
       prevBlock7DayPricesInDebtAsset[i],
-      weekTimeWindow,
-      Math.floor(SECONDS_PER_YEAR / weekTimeWindow)
+      latestBlock.timestamp - prevBlock7Day.timestamp,
+      COMPOUNDING_PERIODS,
+      debtDecimals
     );
 
     const pool = {

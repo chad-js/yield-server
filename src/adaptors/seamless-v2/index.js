@@ -89,10 +89,6 @@ const getLeverageTokens = async (chain, toBlock) => {
   });
 };
 
-function formatUnitsToNumber(value, decimals) {
-  return Number(ethers.utils.formatUnits(value, decimals));
-}
-
 function calculateApy(endValue, startValue, timeWindow, aprPeriods) {
   const endValueBigNumber = BigNumber(endValue);
   const startValueBigNumber = BigNumber(startValue);
@@ -127,12 +123,8 @@ const getLeverageTokenTvlsUsd = async (chain, leverageTokens) => {
   return totalCollaterals.map((totalCollateral, i) => {
     const collateralAsset = leverageTokens[i].collateralAsset;
 
-    const priceBigInt = pricesByAddress[collateralAsset.toLowerCase()]
-      ? ethers.utils.parseUnits(pricesByAddress[collateralAsset.toLowerCase()].toFixed(USD_DECIMALS), USD_DECIMALS).toBigInt()
-      : null;
-
-    return (totalCollateral !== null && leverageTokens[i].collateralDecimals !== null && priceBigInt !== null)
-      ? Number(BigInt(totalCollateral) * priceBigInt / (BigInt(10 ** leverageTokens[i].collateralDecimals) * BigInt(10 ** USD_DECIMALS)))
+    return (totalCollateral !== null && leverageTokens[i].collateralDecimals !== null && pricesByAddress[collateralAsset.toLowerCase()] !== null)
+      ? BigNumber(totalCollateral).dividedBy(BigNumber(10).pow(leverageTokens[i].collateralDecimals)).multipliedBy(BigNumber(pricesByAddress[collateralAsset.toLowerCase()])).toNumber()
       : null;
   });
 }

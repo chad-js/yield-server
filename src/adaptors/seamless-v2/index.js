@@ -9,10 +9,8 @@ const leverageTokenAbi = require('./leverage-token-abi.json');
 const erc20Abi = require('./erc20-abi.json');
 
 const SECONDS_PER_DAY = 86400;
-const DAYS_PER_YEAR = 365;
-const WEEKS_PER_YEAR = 52;
+const SECONDS_PER_YEAR = 31536000;
 const LEVERAGE_TOKEN_DECIMALS = 18;
-const USD_DECIMALS = 18;
 const COMPOUNDING_PERIODS = BigNumber(1);
 const chains = ['ethereum', 'base'];
 
@@ -100,7 +98,7 @@ function calculateApy(endValue, startValue, timeWindow, aprPeriods) {
       aprPeriodsBigNumber
     ).minus(1);
 
-  const apy = apr.plus(1).dividedBy(COMPOUNDING_PERIODS).pow(COMPOUNDING_PERIODS).minus(BigNumber(1)).multipliedBy(BigNumber(100));
+  const apy = apr.dividedBy(COMPOUNDING_PERIODS).plus(1).pow(COMPOUNDING_PERIODS).minus(BigNumber(1)).multipliedBy(BigNumber(100));
   
   return apy.toNumber();
 }
@@ -193,18 +191,20 @@ const leverageTokenApys = async (chain) => {
   );
 
   const pools = allLeverageTokens.map(({ address, collateralAsset, debtDecimals, symbol }, i) => {
+    const dayTimeWindow = latestBlock.timestamp - prevBlock1Day.timestamp;
     const apyBase = calculateApy(
       latestBlockPricesInDebtAsset[i],
       prevBlock1DayPricesInDebtAsset[i],
-      latestBlock.timestamp - prevBlock1Day.timestamp,
-      DAYS_PER_YEAR
+      dayTimeWindow,
+      Math.floor(SECONDS_PER_YEAR / dayTimeWindow)
     );
 
+    const weekTimeWindow = latestBlock.timestamp - prevBlock7Day.timestamp;
     const apyBase7d = calculateApy(
       latestBlockPricesInDebtAsset[i],
       prevBlock7DayPricesInDebtAsset[i],
-      latestBlock.timestamp - prevBlock7Day.timestamp,
-      WEEKS_PER_YEAR
+      weekTimeWindow,
+      Math.floor(SECONDS_PER_YEAR / weekTimeWindow)
     );
 
     const pool = {

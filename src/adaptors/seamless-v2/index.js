@@ -8,6 +8,7 @@ const leverageManagerAbi = require('./leverage-manager-abi.json');
 const leverageTokenAbi = require('./leverage-token-abi.json');
 const erc20Abi = require('./erc20-abi.json');
 
+const SECONDS_PER_YEAR = 31536000;
 const SECONDS_PER_DAY = 86400;
 const DAYS_PER_YEAR = 365;
 const WEEKS_PER_YEAR = 52;
@@ -89,17 +90,25 @@ const getLeverageTokens = async (chain, toBlock) => {
   });
 };
 
-function calculateApy(endValue, startValue, timeWindow, aprPeriods) {
+function calculateApy(endValue, startValue, timeWindow, decimals) {
   const endValueBigNumber = BigNumber(endValue);
   const startValueBigNumber = BigNumber(startValue);
   const timeWindowBigNumber = BigNumber(timeWindow);
-  const aprPeriodsBigNumber = BigNumber(aprPeriods);
+  const decimalsBigNumber = BigNumber(10).pow(decimals);
+
+  console.log("decimalsBigNumber:", decimalsBigNumber.toString());
+  console.log("timeWindow:", timeWindow.toString());
+  console.log("endValueBigNumber.multipliedBy(decimalsBigNumber).multipliedBy(timeWindowBigNumber).div(startValueBigNumber.multipliedBy(BigNumber(SECONDS_PER_YEAR))):", endValueBigNumber.multipliedBy(decimalsBigNumber).multipliedBy(timeWindowBigNumber).div(startValueBigNumber.multipliedBy(BigNumber(SECONDS_PER_YEAR))).toString());
+  console.log("BigNumber(SECONDS_PER_YEAR):", BigNumber(SECONDS_PER_YEAR).toString());
 
   const apr =
-    (endValueBigNumber.div(startValueBigNumber)).pow(
-      aprPeriodsBigNumber
-    ).minus(1);
+    (endValueBigNumber.multipliedBy(decimalsBigNumber).multipliedBy(timeWindowBigNumber).div(startValueBigNumber.multipliedBy(BigNumber(SECONDS_PER_YEAR)))).pow(
+      BigNumber(SECONDS_PER_YEAR)
+    ).minus(decimalsBigNumber);
 
+  console.log("apr:", apr.toString());
+
+  // apy = (((apr + 1) / COMPOUNDING_PERIODS) ^ COMPOUNDING_PERIODS - 1) * 100
   const apy = apr.plus(1).dividedBy(COMPOUNDING_PERIODS).pow(COMPOUNDING_PERIODS).minus(BigNumber(1)).multipliedBy(BigNumber(100));
   
   return apy.toNumber();
@@ -193,18 +202,19 @@ const leverageTokenApys = async (chain) => {
   );
 
   const pools = allLeverageTokens.map(({ address, collateralAsset, debtDecimals, symbol }, i) => {
+    console.log("address:", address);
     const apyBase = calculateApy(
       latestBlockPricesInDebtAsset[i],
       prevBlock1DayPricesInDebtAsset[i],
       latestBlock.timestamp - prevBlock1Day.timestamp,
-      DAYS_PER_YEAR
+      debtDecimals
     );
 
     const apyBase7d = calculateApy(
       latestBlockPricesInDebtAsset[i],
       prevBlock7DayPricesInDebtAsset[i],
       latestBlock.timestamp - prevBlock7Day.timestamp,
-      WEEKS_PER_YEAR
+      debtDecimals
     );
 
     const pool = {
